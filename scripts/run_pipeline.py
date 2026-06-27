@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from database import init_db
 from workflows.pipeline import run_pipeline
+from agents.notifier import get_notifier, notify_run_complete
 from config import load_config, print_config_report
 from health import print_health_report
 
@@ -39,6 +40,14 @@ def main():
     db_path = args.db or config.database_path
     init_db(db_path)
     result = asyncio.run(run_pipeline(mode=args.mode, config=config))
+
+    # Send Telegram notification for standalone runs
+    try:
+        notify_complete = get_notifier()
+        if notify_complete.enabled:
+            notify_run_complete(result, run_id=result.get("run_id", "cli"))
+    except Exception as e:
+        logger.warning(f"Telegram notification failed: {e}")
 
     if result.get("error"):
         sys.exit(1)

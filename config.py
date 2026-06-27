@@ -102,7 +102,7 @@ def load_config(env_path: str = ".env") -> Config:
 
     _config.has_groq = bool(_config.groq_api_key)
     _config.has_youtube_upload = bool(
-        _config.youtube_client_id and _config.youtube_client_secret
+        _config.youtube_client_id and _config.youtube_client_secret and _config.youtube_refresh_token
     )
     _config.has_notifications = bool(
         (_config.telegram_bot_token and _config.telegram_chat_id)
@@ -123,7 +123,7 @@ def _parse_env_file(path: Path):
                 key = key.strip()
                 value = value.strip().strip('"').strip("'")
                 if value:
-                    os.environ.setdefault(key, value)
+                    os.environ[key] = value
     except Exception as e:
         logger.warning(f"Failed to parse {path}: {e}")
 
