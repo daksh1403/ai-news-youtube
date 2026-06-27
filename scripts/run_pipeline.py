@@ -43,8 +43,8 @@ def main():
 
     # Send Telegram notification for standalone runs
     try:
-        notify_complete = get_notifier()
-        if notify_complete.enabled:
+        notifier = get_notifier()
+        if notifier.enabled:
             notify_run_complete(result, run_id=result.get("run_id", "cli"))
     except Exception as e:
         logger.warning(f"Telegram notification failed: {e}")
