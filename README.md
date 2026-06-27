@@ -75,7 +75,7 @@ Every day, automatically:
 
 ```bash
 # Clone the repo
-git clone https://github.com/daksh1403/ai-news-youtube.git
+git clone https://github.com/YOUR_USERNAME/ai-news-youtube.git
 cd ai-news-youtube
 
 # Create virtual environment
@@ -326,35 +326,37 @@ gh auth login
 
 **2. Set all 6 secrets:**
 ```bash
-gh secret set GROQ_API_KEY --body "gsk_your_key_here" --repo daksh1403/ai-news-youtube
+REPO="YOUR_USERNAME/ai-news-youtube"  # Replace with YOUR repo
 
-gh secret set YOUTUBE_CLIENT_ID --body "your_client_id.apps.googleusercontent.com" --repo daksh1403/ai-news-youtube
+gh secret set GROQ_API_KEY --body "gsk_your_key_here" --repo $REPO
 
-gh secret set YOUTUBE_CLIENT_SECRET --body "GOCSPX-your_secret" --repo daksh1403/ai-news-youtube
+gh secret set YOUTUBE_CLIENT_ID --body "your_client_id.apps.googleusercontent.com" --repo $REPO
 
-gh secret set YOUTUBE_REFRESH_TOKEN --body "1//your_refresh_token" --repo daksh1403/ai-news-youtube
+gh secret set YOUTUBE_CLIENT_SECRET --body "GOCSPX-your_secret" --repo $REPO
 
-gh secret set TELEGRAM_BOT_TOKEN --body "123456789:ABCdef..." --repo daksh1403/ai-news-youtube
+gh secret set YOUTUBE_REFRESH_TOKEN --body "1//your_refresh_token" --repo $REPO
 
-gh secret set TELEGRAM_CHAT_ID --body "6786429335" --repo daksh1403/ai-news-youtube
+gh secret set TELEGRAM_BOT_TOKEN --body "123456789:ABCdef..." --repo $REPO
+
+gh secret set TELEGRAM_CHAT_ID --body "6786429335" --repo $REPO
 ```
 
 **3. Verify secrets are set:**
 ```bash
-gh secret list --repo daksh1403/ai-news-youtube
+gh secret list --repo YOUR_USERNAME/ai-news-youtube
 ```
 
 You should see all 6 secrets listed.
 
 **4. Trigger a test run:**
 ```bash
-gh workflow run daily_news.yml --repo daksh1403/ai-news-youtube
+gh workflow run daily_news.yml --repo YOUR_USERNAME/ai-news-youtube
 ```
 
 **5. Watch the run:**
 ```bash
-gh run list --repo daksh1403/ai-news-youtube --limit 5
-gh run view --repo daksh1403/ai-news-youtube  # watch live
+gh run list --repo $REPO --limit 5
+gh run view --repo $REPO  # watch live
 ```
 
 **What happens automatically:**
@@ -415,7 +417,7 @@ for r in runs:
 
 **4. GitHub Actions (if using):**
 ```bash
-gh run list --repo daksh1403/ai-news-youtube --limit 5
+gh run list --repo $REPO --limit 5
 ```
 
 ---
@@ -649,15 +651,15 @@ type pipeline.log | findstr ERROR
 - Check `VIDEOS_PER_DAY=2` in `.env`
 - Check `PIPELINE_RUN_HOURS=6,14` (must have 2 hours)
 - If using GitHub Actions: verify secrets are set with `gh secret list`
-- Check workflow runs: `gh run list --repo daksh1403/ai-news-youtube`
+- Check workflow runs: `gh run list --repo $REPO`
 
 ### GitHub Actions fails
 ```bash
 # Check secrets
-gh secret list --repo daksh1403/ai-news-youtube
+gh secret list --repo YOUR_USERNAME/ai-news-youtube
 
 # View failed run logs
-gh run view <run-id> --log-failed --repo daksh1403/ai-news-youtube
+gh run view <run-id> --log-failed --repo YOUR_USERNAME/ai-news-youtube
 ```
 
 ### FFmpeg not found
@@ -760,9 +762,9 @@ python scripts/seed_sources.py    # Seed 76+ news sources
 python scripts/collect_analytics.py  # Collect analytics
 
 # GitHub Actions
-gh workflow run daily_news.yml --repo daksh1403/ai-news-youtube
-gh run list --repo daksh1403/ai-news-youtube
-gh secret list --repo daksh1403/ai-news-youtube
+gh workflow run daily_news.yml --repo YOUR_USERNAME/ai-news-youtube
+gh run list --repo $REPO
+gh secret list --repo YOUR_USERNAME/ai-news-youtube
 
 # Health
 python scripts/run_pipeline.py --health
