@@ -11,6 +11,11 @@ on:
         required: false
         default: 'daily_news'
 
+# Prevent overlapping runs — only one pipeline at a time
+concurrency:
+  group: pipeline-run
+  cancel-in-progress: false
+
 jobs:
   pipeline:
     runs-on: ubuntu-latest
@@ -23,6 +28,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
       - name: Install FFmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
@@ -32,6 +38,18 @@ jobs:
           pip install --upgrade pip
           pip install -e .
           pip install httpx
+
+      - name: Validate secrets
+        id: validate
+        run: |
+          missing=""
+          [ -z "${{ secrets.GROQ_API_KEY }}" ] && missing="$missing GROQ_API_KEY"
+          [ -z "${{ secrets.YOUTUBE_CLIENT_ID }}" ] && missing="$missing YOUTUBE_CLIENT_ID"
+          [ -z "${{ secrets.YOUTUBE_CLIENT_SECRET }}" ] && missing="$missing YOUTUBE_CLIENT_SECRET"
+          if [ -n "$missing" ]; then
+            echo "::warning::Missing secrets:$missing — some features may be limited"
+          fi
+          echo "ready=true" >> $GITHUB_OUTPUT
 
       - name: Initialize database
         run: python scripts/seed_sources.py
@@ -78,10 +96,12 @@ jobs:
 
       - name: Collect analytics
         if: success()
+        continue-on-error: true
         run: python scripts/collect_analytics.py
 
       - name: Sync status to Turso
         if: success()
+        continue-on-error: true
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
@@ -96,7 +116,7 @@ jobs:
           retention-days: 7
 
       - name: Notify — Pipeline failed
-        if: steps.pipeline.outcome == 'failure'
+        if: failure()
         continue-on-error: true
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -123,7 +143,7 @@ jobs:
           "
 
       - name: Notify — Pipeline succeeded
-        if: steps.pipeline.outcome == 'success'
+        if: success()
         continue-on-error: true
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}

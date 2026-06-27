@@ -25,6 +25,8 @@ class YouTubeUploader:
             return
 
         creds = None
+
+        # Strategy 1: Load from local token file
         if self.TOKEN_PATH.exists():
             try:
                 with open(self.TOKEN_PATH, "r") as f:
@@ -41,47 +43,62 @@ class YouTubeUploader:
                 logger.error(f"Failed to load token: {e}")
                 creds = None
 
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
+        # Strategy 2: Build creds from environment variables (for CI/CD)
+        if not creds:
+            refresh_token = os.getenv("YOUTUBE_REFRESH_TOKEN", "")
+            client_id = os.getenv("YOUTUBE_CLIENT_ID", "")
+            client_secret = os.getenv("YOUTUBE_CLIENT_SECRET", "")
+            if refresh_token and client_id and client_secret:
+                try:
+                    creds = Credentials(
+                        token=None,
+                        refresh_token=refresh_token,
+                        token_uri="https://oauth2.googleapis.com/token",
+                        client_id=client_id,
+                        client_secret=client_secret,
+                        scopes=self.SCOPES,
+                    )
+                    logger.info("Loaded YouTube credentials from environment variables")
+                except Exception as e:
+                    logger.error(f"Failed to build creds from env: {e}")
+                    creds = None
+
+        if not creds:
+            logger.warning("No YouTube credentials found (no token file or env vars). Upload disabled.")
+            return
+
+        # Refresh if expired or has no token
+        if not creds.valid:
+            if creds.expired or creds.token is None:
                 try:
                     creds.refresh(Request())
+                    logger.info("YouTube token refreshed successfully")
                 except Exception as e:
                     logger.error(f"Token refresh failed: {e}")
                     creds = None
-            else:
-                if not self.CLIENT_SECRETS_PATH.exists():
-                    logger.warning("No client secrets found. Upload disabled.")
-                    return
-                try:
-                    from google_auth_oauthlib.flow import InstalledAppFlow
-                    flow = InstalledAppFlow.from_client_secrets_file(
-                        str(self.CLIENT_SECRETS_PATH), self.SCOPES
-                    )
-                    creds = flow.run_local_server(port=0)
-                except Exception as e:
-                    logger.error(f"OAuth flow failed: {e}")
-                    return
 
-            if creds:
-                try:
-                    self.TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-                    token_data = {
-                        "token": creds.token,
-                        "refresh_token": creds.refresh_token,
-                        "token_uri": creds.token_uri,
-                        "client_id": creds.client_id,
-                        "client_secret": creds.client_secret,
-                        "scopes": list(creds.scopes) if creds.scopes else self.SCOPES,
-                    }
-                    with open(self.TOKEN_PATH, "w") as f:
-                        json.dump(token_data, f)
-                except Exception as e:
-                    logger.error(f"Failed to save token: {e}")
+        # Save refreshed token locally for next time
+        if creds:
+            try:
+                self.TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+                token_data = {
+                    "token": creds.token,
+                    "refresh_token": creds.refresh_token,
+                    "token_uri": creds.token_uri,
+                    "client_id": creds.client_id,
+                    "client_secret": creds.client_secret,
+                    "scopes": list(creds.scopes) if creds.scopes else self.SCOPES,
+                }
+                with open(self.TOKEN_PATH, "w") as f:
+                    json.dump(token_data, f)
+            except Exception as e:
+                logger.warning(f"Failed to save refreshed token: {e}")
 
-        try:
-            self.youtube = build("youtube", "v3", credentials=creds)
-        except Exception as e:
-            logger.error(f"Failed to build YouTube service: {e}")
+        if creds:
+            try:
+                self.youtube = build("youtube", "v3", credentials=creds)
+            except Exception as e:
+                logger.error(f"Failed to build YouTube service: {e}")
 
     def upload(
         self,

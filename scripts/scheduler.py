@@ -20,7 +20,7 @@ import signal
 import logging
 import traceback
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta, timedelta, timedelta
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -102,7 +102,7 @@ def get_next_run_time(hour: int) -> datetime:
     now = datetime.now()
     target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
     if target <= now:
-        target = target.replace(day=target.day + 1)
+        target += timedelta(days=1)
     return target
 
 
