@@ -1,0 +1,42 @@
+.env
+.env.tmp
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.db
+*.sqlite
+*.log
+node_modules/
+dist/
+build/
+.DS_Store
+Thumbs.db
+*.mp4
+*.wav
+*.mp3
+*.srt
+*.jpg
+*.png
+checkpoints.db
+output/
+
+# Sensitive credentials
+config/client_secrets.json
+config/youtube_token.json
+
+# Database files (local)
+*.db-shm
+*.db-wal
+
+# Auth state files
+auth
+auth-wal
+
+# Misc
+nul
+news_pipeline.db-shm
+news_pipeline.db-wal
+db
+db-wal

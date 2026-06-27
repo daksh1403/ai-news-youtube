@@ -1,0 +1,154 @@
+name: AI News Pipeline (2 Videos/Day)
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+    - cron: '0 14 * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Pipeline mode'
+        required: false
+        default: 'daily_news'
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e .
+          pip install httpx
+
+      - name: Initialize database
+        run: python scripts/seed_sources.py
+
+      - name: Notify — Pipeline starting
+        if: always()
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python -c "
+          import httpx, os
+          token = os.getenv('TELEGRAM_BOT_TOKEN', '')
+          chat_id = os.getenv('TELEGRAM_CHAT_ID', '')
+          if token and chat_id:
+              run = '${{ github.run_number }}'
+              hour = '${{ github.event.schedule }}' or 'manual'
+              try:
+                  httpx.post(f'https://api.telegram.org/bot{token}/sendMessage', json={
+                      'chat_id': chat_id,
+                      'text': f'🚀 <b>Pipeline Run #{run} Started</b>\n⏰ Schedule: {hour}\n🌐 GitHub Actions',
+                      'parse_mode': 'HTML'
+                  }, timeout=10)
+              except Exception as e:
+                  print(f'Telegram notification failed: {e}')
+          else:
+              print('Telegram not configured, skipping start notification')
+          "
+
+      - name: Run pipeline
+        id: pipeline
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          DATABASE_PATH: pipeline_data.db
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scripts/run_pipeline.py --mode ${{ github.event.inputs.mode || 'daily_news' }}
+
+      - name: Collect analytics
+        if: success()
+        run: python scripts/collect_analytics.py
+
+      - name: Sync status to Turso
+        if: success()
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+        run: python scripts/sync_turso.py
+
+      - name: Upload artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-output-${{ github.run_id }}
+          path: output/
+          retention-days: 7
+
+      - name: Notify — Pipeline failed
+        if: steps.pipeline.outcome == 'failure'
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python -c "
+          import httpx, os
+          token = os.getenv('TELEGRAM_BOT_TOKEN', '')
+          chat_id = os.getenv('TELEGRAM_CHAT_ID', '')
+          if token and chat_id:
+              run = '${{ github.run_number }}'
+              url = '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+              try:
+                  httpx.post(f'https://api.telegram.org/bot{token}/sendMessage', json={
+                      'chat_id': chat_id,
+                      'text': f'❌ <b>Pipeline Run #{run} FAILED</b>\n\n🔗 <a href=\"{url}\">View GitHub Actions Log</a>\n\nCheck the log for error details.',
+                      'parse_mode': 'HTML',
+                      'disable_web_page_preview': True
+                  }, timeout=10)
+              except Exception as e:
+                  print(f'Telegram notification failed: {e}')
+          else:
+              print('Telegram not configured, skipping failure notification')
+          "
+
+      - name: Notify — Pipeline succeeded
+        if: steps.pipeline.outcome == 'success'
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python -c "
+          import httpx, os
+          token = os.getenv('TELEGRAM_BOT_TOKEN', '')
+          chat_id = os.getenv('TELEGRAM_CHAT_ID', '')
+          if token and chat_id:
+              run = '${{ github.run_number }}'
+              url = '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+              try:
+                  httpx.post(f'https://api.telegram.org/bot{token}/sendMessage', json={
+                      'chat_id': chat_id,
+                      'text': f'✅ <b>Pipeline Run #{run} Complete</b>\n\n🎬 Check uploads on YouTube\n🔗 <a href=\"{url}\">GitHub Actions Log</a>',
+                      'parse_mode': 'HTML',
+                      'disable_web_page_preview': True
+                  }, timeout=10)
+              except Exception as e:
+                  print(f'Telegram notification failed: {e}')
+          else:
+              print('Telegram not configured, skipping success notification')
+          "
+
+      - name: Keep-alive heartbeat
+        if: always()
+        run: echo "Pipeline run completed at $(date -u)"

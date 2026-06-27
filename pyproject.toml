@@ -1,0 +1,34 @@
+[project]
+name = "ai-news-youtube"
+version = "1.0.0"
+description = "Autonomous AI News YouTube Channel - Multi-Agent System"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+dependencies = [
+    "langgraph>=0.2.0",
+    "langchain-groq>=0.2.0",
+    "langchain-core>=0.3.0",
+    "ollama>=0.4.0",
+    "feedparser>=6.0.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "schedule>=1.2.0",
+    "google-api-python-client>=2.0.0",
+    "google-auth-oauthlib>=1.0.0",
+    "google-auth-httplib2>=0.2.0",
+    "openai-whisper>=20231117",
+    "Pillow>=10.0.0",
+    "aiofiles>=24.0.0",
+    "sqlalchemy>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "tenacity>=8.0.0",
+]
+
+[project.scripts]
+ai-news = "scripts.run_pipeline:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
