@@ -29,6 +29,9 @@ dependencies = [
 [project.scripts]
 ai-news = "scripts.run_pipeline:main"
 
+[tool.hatch.build.targets.wheel]
+packages = ["agents", "workflows", "scripts", "database"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
