@@ -12,6 +12,9 @@ Setup:
 
 import logging
 import os
+import shutil
+import sqlite3
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -46,6 +49,7 @@ class TelegramNotifier:
         self.bot_token = bot_token or os.getenv("TELEGRAM_BOT_TOKEN", "")
         self.chat_id = chat_id or os.getenv("TELEGRAM_CHAT_ID", "")
         self.enabled = bool(self.bot_token and self.chat_id)
+        self._last_update_id: int = 0
 
     def _send(self, text: str, parse_mode: str = "HTML") -> bool:
         """Send a message via Telegram Bot API."""
@@ -214,6 +218,224 @@ class TelegramNotifier:
         ]
 
         return self._send("\n".join(lines))
+
+    # ── Bot Command Handlers ──────────────────────────────────────
+
+    def check_commands(self, db_path: str = "news_pipeline.db") -> bool:
+        """Poll Telegram for new messages and handle bot commands.
+
+        Supported commands:
+            /status  — Pipeline overview (last run, uploads, health)
+            /runs    — Last 5 pipeline runs
+            /uploads — Last 5 YouTube uploads
+            /health  — System health (FFmpeg, DB, API keys)
+            /help    — List of commands
+        """
+        if not self.enabled:
+            return False
+
+        try:
+            import httpx
+
+            params = {"timeout": 1}
+            if self._last_update_id:
+                params["offset"] = self._last_update_id + 1
+
+            resp = httpx.get(
+                f"https://api.telegram.org/bot{self.bot_token}/getUpdates",
+                params=params,
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                return False
+
+            updates = resp.json().get("result", [])
+            for update in updates:
+                update_id = update.get("update_id", 0)
+                if update_id > self._last_update_id:
+                    self._last_update_id = update_id
+
+                msg = update.get("message", {})
+                chat_id = str(msg.get("chat", {}).get("id", ""))
+                text = msg.get("text", "").strip().lower()
+
+                # Only respond to our authorized chat
+                if chat_id != self.chat_id:
+                    continue
+
+                if text == "/status":
+                    self._handle_status(db_path)
+                elif text == "/runs":
+                    self._handle_runs(db_path)
+                elif text == "/uploads":
+                    self._handle_uploads(db_path)
+                elif text == "/health":
+                    self._handle_health(db_path)
+                elif text in ("/help", "/start", "help"):
+                    self._handle_help()
+
+            return True
+
+        except Exception as e:
+            logger.warning(f"Command check failed: {e}")
+            return False
+
+    def _handle_status(self, db_path: str):
+        """Handle /status command — show pipeline overview."""
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+        try:
+            conn = sqlite3.connect(db_path, timeout=5)
+            # Last run
+            last_run = conn.execute(
+                "SELECT run_id, status, videos_produced, videos_uploaded, started_at "
+                "FROM pipeline_runs ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+
+            # Today's stats
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            today_runs = conn.execute(
+                "SELECT COUNT(*) FROM pipeline_runs WHERE started_at LIKE ?",
+                (f"{today}%",),
+            ).fetchone()[0]
+            today_uploads = conn.execute(
+                "SELECT COUNT(*) FROM uploads WHERE uploaded_at LIKE ?",
+                (f"{today}%",),
+            ).fetchone()[0]
+
+            # Total stats
+            total_runs = conn.execute("SELECT COUNT(*) FROM pipeline_runs").fetchone()[0]
+            total_uploads = conn.execute("SELECT COUNT(*) FROM uploads").fetchone()[0]
+            total_articles = conn.execute("SELECT COUNT(*) FROM used_articles").fetchone()[0]
+
+            conn.close()
+        except Exception:
+            last_run = None
+            today_runs = today_uploads = total_runs = total_uploads = total_articles = 0
+
+        lines = ["<b>📊 PIPELINE STATUS</b>", f"Time: {now}", ""]
+
+        if last_run:
+            status_icon = "✅" if last_run[1] == "completed" else "⚠️" if last_run[1] == "partial" else "❌"
+            lines.extend([
+                f"<b>Last Run:</b> {status_icon} {last_run[1]}",
+                f"  Video: {'Yes' if last_run[2] else 'No'} | YouTube: {'Yes' if last_run[3] else 'No'}",
+                f"  Time: {last_run[4]}",
+            ])
+        else:
+            lines.append("<b>Last Run:</b> None yet")
+
+        lines.extend([
+            "",
+            f"<b>Today:</b> {today_runs} runs, {today_uploads} uploads",
+            f"<b>All-time:</b> {total_runs} runs, {total_uploads} uploads, {total_articles} articles",
+        ])
+
+        self._send("\n".join(lines))
+
+    def _handle_runs(self, db_path: str):
+        """Handle /runs command — show last 5 pipeline runs."""
+        try:
+            conn = sqlite3.connect(db_path, timeout=5)
+            rows = conn.execute(
+                "SELECT run_id, status, videos_produced, videos_uploaded, started_at "
+                "FROM pipeline_runs ORDER BY id DESC LIMIT 5"
+            ).fetchall()
+            conn.close()
+        except Exception:
+            rows = []
+
+        lines = ["<b>📋 LAST 5 RUNS</b>", ""]
+        if rows:
+            for r in rows:
+                icon = "✅" if r[1] == "completed" else "⚠️" if r[1] == "partial" else "❌"
+                yt = "📤" if r[3] else "💾"
+                lines.append(f"{icon} <code>{r[0]}</code> | vid:{r[2]} {yt} | {r[4]}")
+        else:
+            lines.append("No runs recorded yet.")
+
+        self._send("\n".join(lines))
+
+    def _handle_uploads(self, db_path: str):
+        """Handle /uploads command — show last 5 YouTube uploads."""
+        try:
+            conn = sqlite3.connect(db_path, timeout=5)
+            rows = conn.execute(
+                "SELECT youtube_video_id, title, upload_status, uploaded_at "
+                "FROM uploads ORDER BY id DESC LIMIT 5"
+            ).fetchall()
+            conn.close()
+        except Exception:
+            rows = []
+
+        lines = ["<b>🎬 LAST 5 UPLOADS</b>", ""]
+        if rows:
+            for r in rows:
+                title = (r[1] or "Untitled")[:40]
+                url = f"https://youtube.com/watch?v={r[0]}" if r[0] else ""
+                if url:
+                    lines.append(f"  <a href=\"{url}\">{title}</a> ({r[2]})")
+                else:
+                    lines.append(f"  {title} ({r[2]})")
+        else:
+            lines.append("No uploads recorded yet.")
+
+        self._send("\n".join(lines))
+
+    def _handle_health(self, db_path: str):
+        """Handle /health command — show system health."""
+
+        # FFmpeg
+        ffmpeg_ok = shutil.which("ffmpeg") is not None
+        ffmpeg_icon = "✅" if ffmpeg_ok else "❌"
+
+        # Database
+        db_ok = Path(db_path).exists()
+        db_icon = "✅" if db_ok else "❌"
+        db_size = ""
+        if db_ok:
+            try:
+                db_size = f" ({Path(db_path).stat().st_size // 1024}KB)"
+            except Exception:
+                pass
+
+        # API Keys
+        groq_ok = bool(os.getenv("GROQ_API_KEY"))
+        yt_ok = bool(os.getenv("YOUTUBE_REFRESH_TOKEN"))
+        tg_ok = bool(os.getenv("TELEGRAM_BOT_TOKEN"))
+
+        # Output files
+        output = Path("output")
+        videos = len(list((output / "videos").glob("*.mp4"))) if (output / "videos").exists() else 0
+
+        lines = [
+            "<b>🏥 SYSTEM HEALTH</b>",
+            "",
+            f"{ffmpeg_icon} FFmpeg: {'Available' if ffmpeg_ok else 'MISSING'}",
+            f"{db_icon} Database: {db_size or 'Missing'}",
+            f"{'✅' if groq_ok else '❌'} Groq API: {'Set' if groq_ok else 'MISSING'}",
+            f"{'✅' if yt_ok else '❌'} YouTube: {'Configured' if yt_ok else 'Not configured'}",
+            f"{'✅' if tg_ok else '❌'} Telegram: {'Configured' if tg_ok else 'Not configured'}",
+            "",
+            f"📁 Videos on disk: {videos}",
+        ]
+
+        self._send("\n".join(lines))
+
+    def _handle_help(self):
+        """Handle /help command — show available commands."""
+        lines = [
+            "<b>🤖 AI NEWS BOT COMMANDS</b>",
+            "",
+            "/status — Pipeline overview (last run, uploads today)",
+            "/runs — Last 5 pipeline runs",
+            "/uploads — Last 5 YouTube uploads",
+            "/health — System health (FFmpeg, DB, API keys)",
+            "/help — Show this message",
+            "",
+            "<i>Commands are checked every 30 seconds while the scheduler is running.</i>",
+        ]
+        self._send("\n".join(lines))
 
 
 # Global singleton for easy access

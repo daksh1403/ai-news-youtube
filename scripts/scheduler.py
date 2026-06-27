@@ -170,6 +170,13 @@ async def scheduler_loop():
             time.sleep(chunk)
             elapsed += chunk
 
+            # Poll for Telegram bot commands during sleep
+            if notifier.enabled:
+                try:
+                    notifier.check_commands(config.database_path)
+                except Exception:
+                    pass
+
         if not running:
             break
 
