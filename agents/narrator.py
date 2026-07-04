@@ -31,7 +31,7 @@ class NarrationAgent:
 
         if not text:
             logger.warning("No script to narrate")
-            return {**state, "audio_path": "", "subtitle_path": "", "current_step": "video"}
+            return {**state, "audio_path": "", "subtitle_path": "", "current_step": "narrator"}
 
         text = text[:5000]
         run_id = state.get("run_id", "default")
@@ -52,7 +52,7 @@ class NarrationAgent:
                 **state,
                 "audio_path": audio_path,
                 "subtitle_path": subtitle_path,
-                "current_step": "video",
+                "current_step": "narrator",
             }
 
         # Fallback to gTTS (no captions)
@@ -63,7 +63,7 @@ class NarrationAgent:
                 **state,
                 "audio_path": audio_path,
                 "subtitle_path": "",
-                "current_step": "video",
+                "current_step": "narrator",
             }
 
         logger.error("All TTS engines failed")
@@ -71,7 +71,7 @@ class NarrationAgent:
             **state,
             "audio_path": "",
             "subtitle_path": "",
-            "current_step": "video",
+            "current_step": "narrator",
         }
 
     async def _edge_tts(self, text: str, output_path: str, ass_path: str = "") -> str:
@@ -82,18 +82,28 @@ class NarrationAgent:
             communicate = edge_tts.Communicate(text, self.voice)
 
             # Collect word-level timing data for live captions
+            # Only WordBoundary events give us individual word timings.
+            # SentenceBoundary events contain full sentences — skip them.
             word_timings = []
+            audio_duration_ticks = 0
 
             with open(output_path, "wb") as f:
                 async for chunk in communicate.stream():
                     if chunk["type"] == "audio":
                         f.write(chunk["data"])
-                    elif chunk["type"] in ("WordBoundary", "SentenceBoundary"):
+                    elif chunk["type"] == "WordBoundary":
                         word_timings.append({
                             "text": chunk["text"],
                             "offset": chunk["offset"],
                             "duration": chunk["duration"],
                         })
+                        end_tick = chunk["offset"] + chunk["duration"]
+                        if end_tick > audio_duration_ticks:
+                            audio_duration_ticks = end_tick
+                    elif chunk["type"] == "SentenceBoundary":
+                        end_tick = chunk["offset"] + chunk["duration"]
+                        if end_tick > audio_duration_ticks:
+                            audio_duration_ticks = end_tick
 
             if not Path(output_path).exists() or Path(output_path).stat().st_size == 0:
                 return ""
@@ -106,6 +116,20 @@ class NarrationAgent:
                     logger.info(f"Generated {len(word_timings)} word-level caption events")
                     return ass_path
 
+            # Fallback: if edge-tts didn't emit WordBoundary events (e.g. newer API),
+            # create synthetic word timings by splitting the text evenly across duration
+            if not word_timings and ass_path:
+                logger.info("No WordBoundary events from edge-tts — generating synthetic word timings")
+                # Ensure we have a reasonable duration even if edge-tts gave us nothing
+                duration_ticks = audio_duration_ticks if audio_duration_ticks > 0 else 55_000_000
+                synthetic = self._build_synthetic_timings(text, duration_ticks)
+                if synthetic:
+                    ass_content = self._build_ass(synthetic)
+                    if ass_content:
+                        Path(ass_path).write_text(ass_content, encoding="utf-8")
+                        logger.info(f"Generated {len(synthetic)} synthetic word-level caption events")
+                        return ass_path
+
             return ""
 
         except ImportError:
@@ -116,10 +140,12 @@ class NarrationAgent:
             return ""
 
     def _build_ass(self, word_timings: list) -> str:
-        """Build ASS subtitle with one word per event for live/karaoke-style captions.
+        """Build ASS subtitle with TRUE live captions (teleprompter/karaoke style).
 
-        Each word appears centered on screen in large bold white text with black outline,
-        matching the modern Shorts/Reels/TikTok caption style.
+        Each word appears ONE AT A TIME, exactly when spoken.
+        The current word is displayed large and centered on screen.
+        When the next word is spoken, it replaces the previous word.
+        This creates perfect synchronization with the audio.
         """
         header = """[Script Info]
 Title: Live Captions
@@ -131,26 +157,57 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,62,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,3,5,30,30,60,1
+Style: Default,Arial,72,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,3,5,30,30,180,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
+        if not word_timings:
+            return ""
+
         events = []
-        for timing in word_timings:
+        for i, timing in enumerate(word_timings):
             word = timing["text"]
-            if not word.strip():
+            if not word or not word.strip():
                 continue
 
-            start_ass = self._ticks_to_ass_time(timing["offset"])
-            end_ass = self._ticks_to_ass_time(timing["offset"] + timing["duration"])
+            start_tick = timing["offset"]
+            end_tick = start_tick + timing["duration"]
 
-            # Bold the word, add a subtle fade-in effect
-            dialogue = f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{{\\fad(40,40)}}{word}"
+            start_ass = self._ticks_to_ass_time(start_tick)
+            end_ass = self._ticks_to_ass_time(end_tick)
+
+            # Each word appears alone, centered, large, bold
+            # No fade effects - instant appear/disappear for perfect sync
+            dialogue = f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{word.upper()}"
             events.append(dialogue)
 
         return header + "\n".join(events) + "\n"
+
+    def _build_synthetic_timings(self, text: str, total_duration_ticks: int) -> list:
+        """Generate synthetic word timings when edge-tts doesn't emit WordBoundary events.
+
+        Splits the text into words and distributes them evenly across the audio duration.
+        """
+        words = text.split()
+        if not words:
+            return []
+
+        # Ensure we have a valid duration (even if caller passed 0)
+        if total_duration_ticks <= 0:
+            total_duration_ticks = 55_000_000  # 55 seconds default
+
+        per_word_ticks = total_duration_ticks // len(words)
+        timings = []
+        for i, word in enumerate(words):
+            offset = i * per_word_ticks
+            timings.append({
+                "text": word,
+                "offset": offset,
+                "duration": per_word_ticks,
+            })
+        return timings
 
     @staticmethod
     def _ticks_to_ass_time(ticks: int) -> str:

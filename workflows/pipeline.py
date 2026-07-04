@@ -64,7 +64,17 @@ def build_pipeline(config=None):
 
     graph.set_entry_point("collector")
 
-    graph.add_edge("collector", "trend_detector")
+    # If no articles collected, skip all processing steps and go directly to analytics/learner
+    def route_after_collector(state):
+        if not state.get("deduplicated_articles"):
+            logger.warning("No fresh articles found — skipping processing steps")
+            return "analytics"
+        return "trend_detector"
+
+    graph.add_conditional_edges("collector", route_after_collector, {
+        "trend_detector": "trend_detector",
+        "analytics": "analytics",
+    })
     graph.add_edge("trend_detector", "verifier")
     graph.add_edge("verifier", "ranker")
     graph.add_edge("ranker", "seo_optimizer")
@@ -75,6 +85,8 @@ def build_pipeline(config=None):
         review = state.get("script_review", {})
         retry = state.get("retry_count", 0)
         if not review.get("approved") and retry < 3:
+            # Increment retry count to prevent infinite loop
+            state["retry_count"] = retry + 1
             return "scriptwriter"
         return "thumbnail"
 
@@ -98,6 +110,9 @@ async def run_pipeline(mode: str = "daily_news", config=None) -> dict:
     logger.info(f"AI NEWS PIPELINE — Run {run_id} — Mode: {mode}")
 
     pipeline = build_pipeline(config)
+
+    import time
+    pipeline_start_time = time.time()
 
     initial_state: PipelineState = {
         "run_id": run_id,
@@ -130,8 +145,10 @@ async def run_pipeline(mode: str = "daily_news", config=None) -> dict:
         "review_queue_size": 0,
         "content_moderation_strict": config.content_moderation_strict if config else True,
         "verification_limit": config.max_articles_per_run if config else 50,
-        "auto_upload": config.auto_upload if config else False,
-        "review_before_upload": config.review_before_upload if config else True,
+        "auto_upload": config.auto_upload if config else True,
+        "review_before_upload": config.review_before_upload if config else False,
+        "pipeline_duration_seconds": 0,
+        "pipeline_started_at": pipeline_start_time,
     }
 
     try:

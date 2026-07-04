@@ -1,3 +1,4 @@
+import time
 import sqlite3
 import logging
 from datetime import datetime, timezone
@@ -36,20 +37,40 @@ class AnalyticsAgent:
     def _record_run(self, state: dict):
         try:
             with self._get_conn() as conn:
+                # Calculate actual pipeline duration from start time
+                start_time = state.get("pipeline_started_at", 0)
+                if start_time:
+                    duration = round(time.time() - start_time, 1)
+                else:
+                    duration = 0
+
+                # Determine status
+                if state.get("error"):
+                    status = "failed"
+                elif state.get("youtube_video_id"):
+                    status = "completed"
+                elif state.get("video_path"):
+                    status = "completed"
+                elif state.get("deduplicated_articles"):
+                    status = "partial"
+                else:
+                    status = "partial"
+
                 conn.execute("""
                     INSERT INTO pipeline_runs (run_id, started_at, completed_at, status,
-                        articles_collected, scripts_generated, videos_produced, videos_uploaded, errors)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        articles_collected, scripts_generated, videos_produced, videos_uploaded, errors, duration_seconds)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     state.get("run_id", ""),
                     datetime.now(timezone.utc).isoformat(),
                     datetime.now(timezone.utc).isoformat(),
-                    "completed" if state.get("video_path") else "partial",
+                    status,
                     len(state.get("deduplicated_articles", [])),
                     1 if state.get("script") else 0,
                     1 if state.get("video_path") else 0,
                     1 if state.get("youtube_video_id") else 0,
                     str(state.get("errors", [])),
+                    duration,
                 ))
                 conn.commit()
         except Exception as e:

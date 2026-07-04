@@ -79,7 +79,12 @@ Return ONLY a detailed image prompt (2-3 sentences)."""
         except Exception:
             img_prompt = f"Dramatic cinematic news photo, {category}, {title[:60]}"
 
-        base_path = self.image_gen.generate(img_prompt, width=self.WIDTH, height=self.HEIGHT)
+        # Run blocking image generation in a thread to avoid blocking the event loop
+        import asyncio
+        loop = asyncio.get_event_loop()
+        base_path = await loop.run_in_executor(
+            None, lambda: self.image_gen.generate(img_prompt, width=self.WIDTH, height=self.HEIGHT)
+        )
 
         # Apply eye-catching post-processing
         enhanced_path = self._apply_effects(

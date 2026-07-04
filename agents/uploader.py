@@ -54,9 +54,15 @@ class UploadAgent:
             logger.warning("No video file to upload")
             return {**state, "youtube_video_id": "", "youtube_url": "", "current_step": "analytics"}
 
-        if review_before and not auto_upload:
-            logger.info("Upload paused — review_before_upload=true. Video saved locally.")
+        # Upload if auto_upload is enabled (the primary path for automation)
+        # Only skip if review_before_upload is explicitly requested AND auto_upload is off
+        if not auto_upload and review_before:
+            logger.info("Upload paused — AUTO_UPLOAD=false and REVIEW_BEFORE_UPLOAD=true. Video saved locally.")
             return {**state, "youtube_video_id": "local_only", "youtube_url": "", "current_step": "analytics"}
+
+        # auto_upload=false but review_before=false means upload anyway
+        if not auto_upload:
+            logger.info("AUTO_UPLOAD=false but REVIEW_BEFORE_UPLOAD=false — uploading")
 
         uploader = self._get_uploader()
         if not uploader:
@@ -70,16 +76,29 @@ class UploadAgent:
             tags.append("shorts")
 
         safe_title = sanitize_metadata(seo.get("title", "Breaking News"), MAX_TITLE_LENGTH)
-        safe_desc = sanitize_metadata(seo.get("description", "Breaking news update"), MAX_DESCRIPTION_LENGTH)
+
+        # Ensure #shorts is in the description — YouTube requires it for Shorts classification
+        description = seo.get("description", "Breaking news update")
+        hashtags = seo.get("hashtags") or []
+        if not any("#shorts" in tag.lower() for tag in hashtags) and "#shorts" not in description.lower():
+            description = description + "\n\n#shorts"
+        safe_desc = sanitize_metadata(description, MAX_DESCRIPTION_LENGTH)
+
         safe_tags = sanitize_tags(tags)
 
-        result = uploader.upload(
-            video_path=video_path,
-            title=safe_title,
-            description=safe_desc,
-            tags=safe_tags,
-            thumbnail_path=thumbnail_path if thumbnail_path and Path(thumbnail_path).exists() else None,
-            privacy_status="public",
+        # Run blocking upload in a thread to avoid blocking the event loop
+        import asyncio
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: uploader.upload(
+                video_path=video_path,
+                title=safe_title,
+                description=safe_desc,
+                tags=safe_tags,
+                thumbnail_path=thumbnail_path if thumbnail_path and Path(thumbnail_path).exists() else None,
+                privacy_status="public",
+            )
         )
 
         if "error" in result:

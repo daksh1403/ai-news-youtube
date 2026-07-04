@@ -42,3 +42,5 @@ class PipelineState(TypedDict, total=False):
     verification_limit: int
     auto_upload: bool
     review_before_upload: bool
+    pipeline_duration_seconds: float
+    pipeline_started_at: float

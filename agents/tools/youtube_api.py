@@ -8,8 +8,8 @@ logger = logging.getLogger(__name__)
 
 class YouTubeUploader:
     SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
-    TOKEN_PATH = Path("config/youtube_token.json")
-    CLIENT_SECRETS_PATH = Path("config/client_secrets.json")
+    TOKEN_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "youtube_token.json"
+    CLIENT_SECRETS_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "client_secrets.json"
 
     def __init__(self):
         self.youtube = None
@@ -68,14 +68,35 @@ class YouTubeUploader:
             return
 
         # Refresh if expired or has no token
-        if not creds.valid:
-            if creds.expired or creds.token is None:
-                try:
-                    creds.refresh(Request())
-                    logger.info("YouTube token refreshed successfully")
-                except Exception as e:
-                    logger.error(f"Token refresh failed: {e}")
-                    creds = None
+        if creds:
+            if not creds.valid:
+                if creds.expired or creds.token is None:
+                    try:
+                        creds.refresh(Request())
+                        logger.info("YouTube token refreshed successfully")
+                    except Exception as e:
+                        logger.error(f"Token refresh failed: {e}")
+                        # Try to re-authenticate from env vars
+                        refresh_token = os.getenv("YOUTUBE_REFRESH_TOKEN", "")
+                        client_id = os.getenv("YOUTUBE_CLIENT_ID", "")
+                        client_secret = os.getenv("YOUTUBE_CLIENT_SECRET", "")
+                        if refresh_token and client_id and client_secret:
+                            try:
+                                creds = Credentials(
+                                    token=None,
+                                    refresh_token=refresh_token,
+                                    token_uri="https://oauth2.googleapis.com/token",
+                                    client_id=client_id,
+                                    client_secret=client_secret,
+                                    scopes=self.SCOPES,
+                                )
+                                creds.refresh(Request())
+                                logger.info("Re-authenticated from env vars after token refresh failure")
+                            except Exception as e2:
+                                logger.error(f"Re-authentication also failed: {e2}")
+                                creds = None
+                        else:
+                            creds = None
 
         # Save refreshed token locally for next time
         if creds:

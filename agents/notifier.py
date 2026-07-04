@@ -17,6 +17,7 @@ import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional
+from html import escape as html_escape
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +142,7 @@ class TelegramNotifier:
             f"Status: {status_emoji}",
         ])
 
-        return self._send("\n".join(lines))
+        return self._send_truncated("\n".join(lines))
 
     def send_run_failure(
         self,
@@ -167,7 +168,7 @@ class TelegramNotifier:
             elapsed_str = f"Elapsed: {m}m {s}s"
 
         # Truncate error message for Telegram (4096 char limit)
-        error_short = error[:500] if error else "Unknown error"
+        error_short = html_escape(error[:500]) if error else "Unknown error"
 
         lines = [
             "FAILED <b>PIPELINE RUN FAILED</b>",
@@ -184,7 +185,18 @@ class TelegramNotifier:
             "<i>Check logs: cat pipeline.log | tail -50</i>",
         ]
 
-        return self._send("\n".join(lines))
+        return self._send_truncated("\n".join(lines))
+
+    def send_run_starting(self, run_id: str = "", mode: str = "daily_news") -> bool:
+        """Send a notification when a pipeline run is starting."""
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        lines = [
+            "<b>PIPELINE RUN STARTING</b>",
+            f"Time: {now}",
+            f"Run: <code>{run_id}</code>",
+            f"Mode: {mode}",
+        ]
+        return self._send_truncated("\n".join(lines))
 
     def send_scheduler_startup(self, config) -> bool:
         """Send a notification when the scheduler starts."""
@@ -200,7 +212,7 @@ class TelegramNotifier:
             f"Moderation: {'Strict' if config.content_moderation_strict else 'Standard'}",
         ]
 
-        return self._send("\n".join(lines))
+        return self._send_truncated("\n".join(lines))
 
     def send_daily_summary(self, runs_today: int, uploads_today: int, errors_today: int) -> bool:
         """Send end-of-day summary."""
@@ -217,7 +229,7 @@ class TelegramNotifier:
             f"Status: {status}",
         ]
 
-        return self._send("\n".join(lines))
+        return self._send_truncated("\n".join(lines))
 
     # ── Bot Command Handlers ──────────────────────────────────────
 
@@ -280,6 +292,12 @@ class TelegramNotifier:
             logger.warning(f"Command check failed: {e}")
             return False
 
+    def _send_truncated(self, text: str) -> bool:
+        """Send a message, truncated to Telegram's 4096 char limit."""
+        if len(text) > 4000:
+            text = text[:3997] + "..."
+        return self._send(text)
+
     def _handle_status(self, db_path: str):
         """Handle /status command — show pipeline overview."""
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -331,7 +349,7 @@ class TelegramNotifier:
             f"<b>All-time:</b> {total_runs} runs, {total_uploads} uploads, {total_articles} articles",
         ])
 
-        self._send("\n".join(lines))
+        self._send_truncated("\n".join(lines))
 
     def _handle_runs(self, db_path: str):
         """Handle /runs command — show last 5 pipeline runs."""
@@ -354,7 +372,7 @@ class TelegramNotifier:
         else:
             lines.append("No runs recorded yet.")
 
-        self._send("\n".join(lines))
+        self._send_truncated("\n".join(lines))
 
     def _handle_uploads(self, db_path: str):
         """Handle /uploads command — show last 5 YouTube uploads."""
@@ -380,7 +398,7 @@ class TelegramNotifier:
         else:
             lines.append("No uploads recorded yet.")
 
-        self._send("\n".join(lines))
+        self._send_truncated("\n".join(lines))
 
     def _handle_health(self, db_path: str):
         """Handle /health command — show system health."""
@@ -420,7 +438,7 @@ class TelegramNotifier:
             f"📁 Videos on disk: {videos}",
         ]
 
-        self._send("\n".join(lines))
+        self._send_truncated("\n".join(lines))
 
     def _handle_help(self):
         """Handle /help command — show available commands."""
@@ -435,7 +453,7 @@ class TelegramNotifier:
             "",
             "<i>Commands are checked every 30 seconds while the scheduler is running.</i>",
         ]
-        self._send("\n".join(lines))
+        self._send_truncated("\n".join(lines))
 
 
 # Global singleton for easy access
@@ -453,7 +471,7 @@ def get_notifier() -> TelegramNotifier:
 def send_notification(message: str) -> bool:
     """Quick send a plain text notification (backward-compatible with scheduler)."""
     n = get_notifier()
-    return n._send(message)
+    return n._send_truncated(message)
 
 
 def notify_run_complete(result: dict, run_id: str = "") -> bool:

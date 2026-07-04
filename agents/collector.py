@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import sqlite3
 import logging
@@ -49,7 +50,9 @@ class NewsCollectorAgent:
 
     async def collect(self, state: dict) -> dict:
         logger.info("Fetching news from all sources...")
-        articles = self.rss.fetch_all(hours=48)
+        # Run sync RSS fetching in a thread to avoid blocking the async event loop
+        loop = asyncio.get_event_loop()
+        articles = await loop.run_in_executor(None, lambda: self.rss.fetch_all(hours=48))
 
         deduplicated = self._deduplicate(articles)
 

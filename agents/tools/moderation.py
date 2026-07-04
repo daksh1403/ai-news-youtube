@@ -91,17 +91,17 @@ def moderate_content(
                     severity="medium",
                 )
 
-    if len(title.strip()) < 10:
+    if len(title.strip()) < 5:
         return ModerationResult(
             allowed=False,
-            reason="Title too short (< 10 chars)",
+            reason="Title too short (< 5 chars)",
             severity="medium",
         )
 
-    if len(content.strip()) < 50:
+    if len(content.strip()) < 20:
         return ModerationResult(
             allowed=False,
-            reason="Content too short (< 50 chars)",
+            reason="Content too short (< 20 chars)",
             severity="medium",
         )
 

@@ -13,6 +13,13 @@ logger = logging.getLogger(__name__)
 def check_ffmpeg() -> dict:
     search_paths = [
         "ffmpeg",
+        # macOS
+        "/opt/homebrew/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+        str(Path.home() / "homebrew/bin/ffmpeg"),
+        # Linux
+        "/usr/bin/ffmpeg",
+        # Windows
         str(Path.home() / "AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe/ffmpeg-8.1.1-full_build/bin/ffmpeg.exe"),
         r"C:\ffmpeg\bin\ffmpeg.exe",
         r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
@@ -48,8 +55,12 @@ def check_database(db_path: str) -> dict:
         used_count = cursor.fetchone()[0]
         cursor = conn.execute("SELECT COUNT(*) FROM pipeline_runs")
         run_count = cursor.fetchone()[0]
-        cursor = conn.execute("SELECT COUNT(*) FROM review_queue")
-        review_count = cursor.fetchone()[0]
+        # review_queue is created dynamically by the verifier, may not exist yet
+        review_count = 0
+        tables = [row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+        if "review_queue" in tables:
+            cursor = conn.execute("SELECT COUNT(*) FROM review_queue")
+            review_count = cursor.fetchone()[0]
         conn.close()
         return {
             "status": "ok",

@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import logging
+import asyncio
 from datetime import datetime, timezone
 from contextlib import contextmanager
 
@@ -53,7 +54,13 @@ class FactVerificationAgent:
         flagged = 0
         review_queue = []
 
-        for article in articles[:limit]:
+        # Process in batches with delays to avoid Groq rate limits (30 RPM)
+        batch_size = 5
+        for i, article in enumerate(articles[:limit]):
+            # Add delay between batches to stay under rate limit
+            if i > 0 and i % batch_size == 0:
+                await asyncio.sleep(10)
+
             text = article.get("title", "") + " " + article.get("content", "")
             mod_result = moderate_content(
                 title=article.get("title", ""),

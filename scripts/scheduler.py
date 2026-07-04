@@ -1,7 +1,8 @@
 """
-NEVER-STOP SCHEDULER v3
+NEVER-STOP SCHEDULER v5
 ========================
-With config validation, health checks, and YouTube safety guardrails.
+With config validation, health checks, YouTube safety guardrails,
+and lifetime reliability features (log rotation, disk cleanup, watchdog).
 
 Fallback chain: Groq → OpenRouter → Cerebras → Ollama (local, always works)
 The scheduler NEVER stops, even when API keys run out.
@@ -14,11 +15,12 @@ Usage:
 
 import sys
 import os
-import time
 import asyncio
 import signal
 import logging
+import time
 import traceback
+import shutil
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -57,6 +59,131 @@ else:
     signal.signal(signal.SIGINT, handle_signal)
 
 
+# ── LIFETIME RELIABILITY: Log rotation ─────────────────────────────
+def rotate_logs(max_size_mb: int = 50, keep_backups: int = 3):
+    """Rotate log files when they exceed max_size_mb."""
+    for log_file in ["pipeline.log", "scheduler_error.log"]:
+        log_path = Path(log_file)
+        if log_path.exists():
+            size_mb = log_path.stat().st_size / (1024 * 1024)
+            if size_mb > max_size_mb:
+                logger.info(f"Rotating {log_file} ({size_mb:.1f}MB > {max_size_mb}MB)")
+                # Remove oldest backup
+                oldest = Path(f"{log_file}.{keep_backups}")
+                if oldest.exists():
+                    oldest.unlink()
+                # Shift backups
+                for i in range(keep_backups - 1, 0, -1):
+                    src = Path(f"{log_file}.{i}")
+                    dst = Path(f"{log_file}.{i + 1}")
+                    if src.exists():
+                        src.rename(dst)
+                # Current becomes .1
+                log_path.rename(f"{log_file}.1")
+                # Create new empty log
+                Path(log_file).touch()
+
+
+# ── LIFETIME RELIABILITY: Disk cleanup ─────────────────────────────
+def cleanup_old_files(output_dir: str = "output", max_days: int = 30, max_files: int = 200):
+    """Remove old output files to prevent disk space exhaustion."""
+    output = Path(output_dir)
+    if not output.exists():
+        return
+
+    cutoff = datetime.now() - timedelta(days=max_days)
+    removed = 0
+
+    for subdir in ["videos", "audio", "thumbnails"]:
+        dir_path = output / subdir
+        if not dir_path.exists():
+            continue
+
+        files = sorted(dir_path.glob("*"), key=lambda f: f.stat().st_mtime, reverse=True)
+
+        # Remove files older than max_days
+        for f in files:
+            try:
+                mtime = datetime.fromtimestamp(f.stat().st_mtime)
+                if mtime < cutoff:
+                    f.unlink()
+                    removed += 1
+            except Exception:
+                pass
+
+        # Also enforce max file count (keep newest)
+        files = sorted(dir_path.glob("*"), key=lambda f: f.stat().st_mtime, reverse=True)
+        for f in files[max_files:]:
+            try:
+                f.unlink()
+                removed += 1
+            except Exception:
+                pass
+
+    if removed > 0:
+        logger.info(f"Cleaned up {removed} old output files")
+
+
+# ── LIFETIME RELIABILITY: Database maintenance ─────────────────────
+def maintain_database(db_path: str, max_runs: int = 500):
+    """Keep database size in check by pruning old records."""
+    try:
+        import sqlite3
+        conn = sqlite3.connect(db_path, timeout=5)
+
+        # Count pipeline runs
+        count = conn.execute("SELECT COUNT(*) FROM pipeline_runs").fetchone()[0]
+        if count > max_runs:
+            # Keep only the most recent runs
+            delete_count = count - max_runs
+            conn.execute(
+                "DELETE FROM pipeline_runs WHERE id NOT IN "
+                "(SELECT id FROM pipeline_runs ORDER BY id DESC LIMIT ?)",
+                (max_runs,),
+            )
+            conn.commit()
+            logger.info(f"Pruned {delete_count} old pipeline runs from database")
+
+        conn.close()
+    except Exception as e:
+        logger.debug(f"Database maintenance skipped: {e}")
+
+
+# ── LIFETIME RELIABILITY: Health watchdog ───────────────────────────
+def check_system_health():
+    """Quick health checks to catch issues before they become critical."""
+    warnings = []
+
+    # Check disk space (warn if < 1GB free)
+    try:
+        stat = shutil.disk_usage(".")
+        free_gb = stat.free / (1024 ** 3)
+        if free_gb < 1:
+            warnings.append(f"LOW DISK SPACE: {free_gb:.1f}GB remaining")
+    except Exception:
+        pass
+
+    # Check if FFmpeg is still available
+    if not shutil.which("ffmpeg"):
+        warnings.append("FFmpeg not found in PATH")
+
+    # Check database integrity
+    db_path = "news_pipeline.db"
+    if Path(db_path).exists():
+        try:
+            import sqlite3
+            conn = sqlite3.connect(db_path, timeout=5)
+            conn.execute("SELECT COUNT(*) FROM pipeline_runs")
+            conn.close()
+        except Exception:
+            warnings.append("Database corruption detected")
+
+    for w in warnings:
+        logger.warning(f"HEALTH CHECK: {w}")
+
+    return warnings
+
+
 def reset_daily_limits():
     router = LLMRouter()
     router.reset_daily()
@@ -91,7 +218,7 @@ async def execute_pipeline_with_retry(config, mode: str = "daily_news", max_retr
             logger.info(f"Retrying in {wait}s...")
             elapsed_wait = 0
             while running and elapsed_wait < wait:
-                time.sleep(min(10, wait - elapsed_wait))
+                await asyncio.sleep(min(10, wait - elapsed_wait))
                 elapsed_wait += 10
 
     logger.warning("All retries exhausted, continuing to next scheduled time")
@@ -141,12 +268,24 @@ async def scheduler_loop():
 
     run_count = 0
     last_reset_day = datetime.now().day
+    last_maintenance_day = datetime.now().day
 
     while running:
         current_day = datetime.now().day
         if current_day != last_reset_day:
             reset_daily_limits()
             last_reset_day = current_day
+
+        # Daily maintenance (once per day)
+        if current_day != last_maintenance_day:
+            try:
+                rotate_logs()
+                cleanup_old_files()
+                maintain_database(config.database_path)
+                check_system_health()
+                last_maintenance_day = current_day
+            except Exception as e:
+                logger.error(f"Maintenance error: {e}")
 
         now = datetime.now()
         next_runs = sorted(get_next_run_time(h) for h in config.pipeline_run_hours)
@@ -167,7 +306,7 @@ async def scheduler_loop():
         elapsed = 0
         while running and elapsed < sleep_sec:
             chunk = min(sleep_interval, sleep_sec - elapsed)
-            time.sleep(chunk)
+            await asyncio.sleep(chunk)
             elapsed += chunk
 
             # Poll for Telegram bot commands during sleep
@@ -182,6 +321,12 @@ async def scheduler_loop():
 
         run_count += 1
         logger.info(f"====== RUN #{run_count} STARTING ======")
+
+        # Notify of starting run
+        try:
+            notifier.send_run_starting(run_id=f"#{run_count}")
+        except Exception:
+            pass
 
         try:
             result = await execute_pipeline_with_retry(config, mode="daily_news", max_retries=2)
@@ -205,7 +350,7 @@ async def scheduler_loop():
             retry_wait = 300
             retry_elapsed = 0
             while running and retry_elapsed < retry_wait:
-                time.sleep(min(30, retry_wait - retry_elapsed))
+                await asyncio.sleep(min(30, retry_wait - retry_elapsed))
                 retry_elapsed += 30
 
         logger.info(f"====== RUN #{run_count} FINISHED ======")

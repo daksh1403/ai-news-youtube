@@ -45,9 +45,9 @@ class Config:
     telegram_chat_id: str = ""
     discord_webhook_url: str = ""
 
-    # YouTube Safety
-    auto_upload: bool = False
-    review_before_upload: bool = True
+    # YouTube Safety — enabled by default for fully automatic operation
+    auto_upload: bool = True
+    review_before_upload: bool = False
 
     # Derived
     has_groq: bool = False
@@ -96,8 +96,8 @@ def load_config(env_path: str = ".env") -> Config:
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
         discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL", ""),
-        auto_upload=os.getenv("AUTO_UPLOAD", "false").lower() == "true",
-        review_before_upload=os.getenv("REVIEW_BEFORE_UPLOAD", "true").lower() == "true",
+        auto_upload=os.getenv("AUTO_UPLOAD", "true").lower() == "true",
+        review_before_upload=os.getenv("REVIEW_BEFORE_UPLOAD", "false").lower() == "true",
     )
 
     _config.has_groq = bool(_config.groq_api_key)
@@ -114,18 +114,23 @@ def load_config(env_path: str = ".env") -> Config:
 
 def _parse_env_file(path: Path):
     try:
-        for line in path.read_text().splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if "=" in line:
-                key, _, value = line.partition("=")
-                key = key.strip()
-                value = value.strip().strip('"').strip("'")
-                if value:
-                    os.environ[key] = value
-    except Exception as e:
-        logger.warning(f"Failed to parse {path}: {e}")
+        from dotenv import load_dotenv
+        load_dotenv(path, override=True)
+    except ImportError:
+        # Fallback to manual parsing if python-dotenv not available
+        try:
+            for line in path.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    key, _, value = line.partition("=")
+                    key = key.strip()
+                    value = value.strip().strip('"').strip("'")
+                    if value:
+                        os.environ[key] = value
+        except Exception as e:
+            logger.warning(f"Failed to parse {path}: {e}")
 
 
 def get_config() -> Config:

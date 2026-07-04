@@ -95,20 +95,34 @@ class RSSParser:
         )
 
     def fetch_all(self, hours: int = 48) -> List[dict]:
+        """Fetch articles from all RSS sources. Non-blocking where possible."""
+        import concurrent.futures
+
         articles = []
         cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
         source_list = list(self.ALL_SOURCES.items())
         random.shuffle(source_list)
 
-        for i, (source_name, url) in enumerate(source_list):
+        # Use thread pool for parallel fetching to avoid blocking the event loop
+        def fetch_one(args):
+            source_name, url = args
             try:
-                items = self._fetch_feed(url, source_name, cutoff)
-                articles.extend(items)
+                return self._fetch_feed(url, source_name, cutoff)
             except Exception as e:
                 logger.error(f"Error fetching {source_name}: {e}")
+                return []
 
-            if i < len(source_list) - 1:
-                time.sleep(0.5 + random.uniform(0, 0.5))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(fetch_one, item): item for item in source_list}
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    items = future.result(timeout=30)
+                    if items:
+                        articles.extend(items)
+                except concurrent.futures.TimeoutError:
+                    logger.warning(f"Feed fetch timed out: {futures[future][0]}")
+                except Exception as e:
+                    logger.error(f"Feed fetch error: {e}")
 
         return articles
 
